@@ -1,0 +1,6 @@
+{
+  "name": "NEXUS EMPIRE",
+  "description": "Simulador empresarial 3D isométrico com 12 funcionários inteligentes, departamentos autônomos e coordenação central via NEXUS CORE.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
