@@ -261,7 +261,7 @@ export const Office3DViewport: React.FC<Office3DViewportProps> = ({
       stateRef.current.employees,
       stateRef.current.tasks,
       stateRef.current.historicalLedger.length,
-      stateRef.current.historicalLedger[0]?.taskTitle ?? 'Sistema Inicializado',
+      stateRef.current.historicalLedger[0]?.taskTitle ?? 'Aguardando entrega real',
       maxAnisotropy,
       isSoftwareGl
     );
@@ -425,12 +425,15 @@ export const Office3DViewport: React.FC<Office3DViewportProps> = ({
       }
       const sx = ((_projVec.x + 1) / 2) * w;
       const sy = ((-_projVec.y + 1) / 2) * h;
-      if (sx < -60 || sx > w + 60 || sy < -30 || sy > h + 30) {
+      if (sx < -80 || sx > w + 80 || sy < -40 || sy > h + 40) {
         el.style.display = 'none';
         return;
       }
+      const padX = Math.min(96, Math.floor(w * 0.24));
+      const clampedSx = Math.max(padX, Math.min(w - padX, sx));
+      const clampedSy = Math.max(46, Math.min(h - 14, sy));
       el.style.display = 'flex';
-      el.style.transform = `translate3d(${Math.round(sx)}px, ${Math.round(sy)}px, 0) translate(-50%, -100%)`;
+      el.style.transform = `translate3d(${Math.round(clampedSx)}px, ${Math.round(clampedSy)}px, 0) translate(-50%, -100%)`;
     }
 
     function tick() {

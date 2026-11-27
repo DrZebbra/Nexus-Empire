@@ -1,23 +1,32 @@
 import React, { useState } from 'react';
 import {
+  AlertCircle,
   CheckCircle2,
   Cpu,
   MessageSquare,
   Send,
   Shield,
-  Sparkles,
   Wrench,
   X,
 } from 'lucide-react';
-import { formatEmployeeBubbleText } from '../core/simulationRules';
-import { sendMessageToEmployeeAgent } from '../services/aiService';
+import {
+  formatEmployeeBubbleText,
+  getDefaultChannelsForEmployee,
+} from '../core/simulationRules';
+import {
+  sendMessageToEmployeeAgent,
+  type TokenUsageReport,
+} from '../services/aiService';
 import type {
   AutonomyLevel,
+  ChannelConnection,
+  ChannelId,
   CharacterAnimationState,
   EmployeeProfile,
   SkillDefinition,
   TaskItem,
   TaskPriority,
+  TokenUsagePolicy,
   ToolDefinition,
 } from '../types/nexus';
 
@@ -26,6 +35,8 @@ interface EmployeeModalProps {
   allEmployees: EmployeeProfile[];
   skills: SkillDefinition[];
   tools: ToolDefinition[];
+  channels: ChannelConnection[];
+  tokenPolicy: TokenUsagePolicy;
   tasks: TaskItem[];
   geminiConfigured: boolean;
   onClose: () => void;
@@ -39,12 +50,14 @@ interface EmployeeModalProps {
     departmentId: EmployeeProfile['departmentId'];
     priority: TaskPriority;
     dueDate: string;
+    requiredChannelIds: ChannelId[];
   }) => void;
   onAppendConversation: (
     employeeId: string,
     ceoMsg: string,
     replyMsg: string,
-    isDemo: boolean
+    tokenUsage: TokenUsageReport,
+    model: string
   ) => void;
 }
 
@@ -53,6 +66,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   allEmployees,
   skills,
   tools,
+  channels,
+  tokenPolicy,
   tasks,
   geminiConfigured,
   onClose,
@@ -70,6 +85,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   const [partnerId, setPartnerId] = useState<string>('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskPriority, setNewTaskPriority] = useState<TaskPriority>('media');
+  const [selectedChannelId, setSelectedChannelId] = useState<ChannelId | ''>('');
 
   if (!employee) return null;
 
@@ -80,6 +96,8 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
   const empSkills = skills.filter((s) => employee.skillIds.includes(s.id));
   const empTools = tools.filter((t) => employee.authorizedToolIds.includes(t.id));
   const bubbleStatus = formatEmployeeBubbleText(employee, allEmployees);
+  const defaultChannel = getDefaultChannelsForEmployee(employee.id)[0];
+  const effectiveChannelId = (selectedChannelId || defaultChannel) as ChannelId;
 
   const handleSendChat = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,8 +106,19 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     setChatError(null);
     setChatLoading(true);
     try {
-      const res = await sendMessageToEmployeeAgent(employee, msg, empTasks);
-      onAppendConversation(employee.id, msg, res.reply, res.mode === 'demo');
+      const res = await sendMessageToEmployeeAgent(
+        employee,
+        msg,
+        empTasks,
+        tokenPolicy
+      );
+      onAppendConversation(
+        employee.id,
+        msg,
+        res.reply,
+        res.tokenUsage,
+        res.model
+      );
       setChatInput('');
     } catch (err) {
       setChatError(err instanceof Error ? err.message : 'Erro ao enviar mensagem.');
@@ -103,11 +132,12 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     if (!newTaskTitle.trim()) return;
     onDelegateTask({
       title: newTaskTitle.trim(),
-      description: `Delegado diretamente pelo CEO para ${employee.name}.`,
+      description: `Tarefa real determinada pelo CEO para ${employee.name}. Requer permissão do superior e canal oficial conectado.`,
       assigneeId: employee.id,
       departmentId: employee.departmentId,
       priority: newTaskPriority,
       dueDate: new Date(Date.now() + 86400000 * 2).toISOString().slice(0, 10),
+      requiredChannelIds: [effectiveChannelId],
     });
     setNewTaskTitle('');
   };
@@ -177,7 +207,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               </span>
             </div>
             <div>
-              <span className="text-slate-400 block">Produtividade</span>
+              <span className="text-slate-400 block">Produtividade Real</span>
               <span className="font-mono font-semibold text-emerald-400">
                 {employee.productivity}%
               </span>
@@ -297,7 +327,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            Competências &amp; Ferramentas
+            Habilidades &amp; Canais
           </button>
         </div>
 
@@ -307,9 +337,9 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
             <div className="flex flex-col h-full gap-3">
               {!geminiConfigured && (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 shrink-0 text-amber-400" />
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
                   <span>
-                    Modo de Demonstração Ativo: configure GEMINI_API_KEY no servidor para conversas com Gemini em tempo real.
+                    Configure GEMINI_API_KEY nos segredos do servidor para conversar em tempo real com este agente.
                   </span>
                 </div>
               )}
@@ -317,7 +347,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
                 {employee.conversationHistory.length === 0 ? (
                   <p className="text-xs text-slate-400 py-4 text-center">
-                    Inicie uma conversa direta com {employee.name} para consultar andamento ou alinhar prioridades.
+                    Nenhuma conversa registrada. Envie uma instrução real para {employee.name}.
                   </p>
                 ) : (
                   employee.conversationHistory.map((m) => (
@@ -332,7 +362,9 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                       <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
                         <span className="font-semibold text-slate-300">
                           {m.senderName}
-                          {m.isDemo ? ' · Demonstração' : ''}
+                          {typeof m.tokensUsed === 'number' && m.tokensUsed > 0
+                            ? ` · ${m.tokensUsed} tokens`
+                            : ''}
                         </span>
                         <span className="font-mono">
                           {new Date(m.timestamp).toLocaleTimeString('pt-BR', {
@@ -378,16 +410,31 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                 className="rounded-lg border border-slate-800 bg-[#111722] p-3 space-y-2.5"
               >
                 <span className="text-xs font-semibold text-slate-200 block">
-                  Delegar nova tarefa para {employee.name}
+                  Determinar tarefa real para {employee.name}
                 </span>
+                <p className="text-[11px] text-slate-400">
+                  O funcionário solicitará permissão ao superior e aguardará o canal oficial conectado antes de executar.
+                </p>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
                     type="text"
                     value={newTaskTitle}
                     onChange={(e) => setNewTaskTitle(e.target.value)}
-                    placeholder="Título da atividade..."
+                    placeholder="Título da tarefa..."
                     className="flex-1 rounded bg-[#090D12] border border-slate-700 px-3 py-2 text-xs text-slate-100"
                   />
+                  <select
+                    value={effectiveChannelId}
+                    onChange={(e) => setSelectedChannelId(e.target.value as ChannelId)}
+                    aria-label="Canal exigido"
+                    className="rounded bg-[#090D12] border border-slate-700 px-2.5 py-2 text-xs text-slate-100"
+                  >
+                    {channels.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.status === 'connected' ? 'Conectado' : 'Off'})
+                      </option>
+                    ))}
+                  </select>
                   <select
                     value={newTaskPriority}
                     onChange={(e) => setNewTaskPriority(e.target.value as TaskPriority)}
@@ -403,7 +450,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                     type="submit"
                     className="px-4 py-2 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs cursor-pointer whitespace-nowrap"
                   >
-                    Delegar
+                    Determinar
                   </button>
                 </div>
               </form>
@@ -411,7 +458,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               <div className="space-y-2">
                 {empTasks.length === 0 ? (
                   <p className="text-xs text-slate-400">
-                    Nenhuma tarefa atribuída no momento.
+                    Nenhuma tarefa real atribuída no momento.
                   </p>
                 ) : (
                   empTasks.map((t) => (
@@ -422,7 +469,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                       <div>
                         <p className="text-xs font-semibold text-slate-100">{t.title}</p>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          Estado: {t.status} · Prioridade: {t.priority} · Prazo: {t.dueDate}
+                          Estado: {t.status} · Permissão: {t.permissionStatus} · Prazo: {t.dueDate}
                         </p>
                       </div>
                       <CheckCircle2
@@ -451,7 +498,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               <div>
                 <p className="font-semibold text-slate-200 mb-2 flex items-center gap-1.5">
                   <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Competências ({empSkills.length})</span>
+                  <span>Habilidades Mantidas ({empSkills.length})</span>
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {empSkills.map((sk) => (

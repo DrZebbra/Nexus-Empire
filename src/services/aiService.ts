@@ -1,13 +1,27 @@
-import type { DepartmentId, EmployeeProfile, TaskItem, TaskPriority } from '../types/nexus';
+import type {
+  ChannelId,
+  DepartmentId,
+  EmployeeProfile,
+  GroundingSource,
+  TaskItem,
+  TaskPriority,
+  TokenUsagePolicy,
+} from '../types/nexus';
+
+export interface TokenUsageReport {
+  promptTokens: number;
+  candidatesTokens: number;
+  totalTokens: number;
+}
 
 export interface NexusServerStatus {
   geminiConfigured: boolean;
   model: string;
   supabaseConfigured: boolean;
+  channelAvailability: Record<ChannelId, boolean>;
 }
 
 export interface NexusCorePlanResult {
-  mode: 'live' | 'demo';
   reply: string;
   targetDepartment: DepartmentId;
   leadEmployeeId: string;
@@ -17,25 +31,76 @@ export interface NexusCorePlanResult {
     description: string;
     assigneeId: string;
     priority: TaskPriority;
+    requiredChannelIds: ChannelId[];
   }>;
+  tokenUsage: TokenUsageReport;
+  model: string;
 }
 
 export async function fetchNexusServerStatus(): Promise<NexusServerStatus> {
   try {
     const res = await fetch('/api/nexus/status');
     if (!res.ok) {
-      return { geminiConfigured: false, model: 'gemini-4-hydrogen', supabaseConfigured: false };
+      return {
+        geminiConfigured: false,
+        model: 'gemini-4-hydrogen',
+        supabaseConfigured: false,
+        channelAvailability: {
+          ch_google_search: false,
+          ch_supabase: false,
+          ch_google_ads: false,
+          ch_meta_ads: false,
+          ch_ecommerce: false,
+          ch_whatsapp: false,
+        },
+      };
     }
     return (await res.json()) as NexusServerStatus;
   } catch {
-    return { geminiConfigured: false, model: 'gemini-4-hydrogen', supabaseConfigured: false };
+    return {
+      geminiConfigured: false,
+      model: 'gemini-4-hydrogen',
+      supabaseConfigured: false,
+      channelAvailability: {
+        ch_google_search: false,
+        ch_supabase: false,
+        ch_google_ads: false,
+        ch_meta_ads: false,
+        ch_ecommerce: false,
+        ch_whatsapp: false,
+      },
+    };
   }
+}
+
+export async function verifyOfficialChannel(channelId: ChannelId): Promise<{
+  ok: boolean;
+  verifiedAt: string;
+  accountLabel: string;
+}> {
+  const res = await fetch('/api/nexus/channels/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channelId }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      payload.message ?? 'Não foi possível verificar a conexão oficial do canal.'
+    );
+  }
+  return {
+    ok: true,
+    verifiedAt: String(payload.verifiedAt ?? new Date().toISOString()),
+    accountLabel: String(payload.accountLabel ?? 'Conexão Oficial Verificada'),
+  };
 }
 
 export async function sendDirectiveToNexusCore(
   directive: string,
   employees: EmployeeProfile[],
-  tasks: TaskItem[]
+  tasks: TaskItem[],
+  tokenPolicy: TokenUsagePolicy
 ): Promise<NexusCorePlanResult> {
   const employeesSummary = employees
     .map(
@@ -52,52 +117,13 @@ export async function sendDirectiveToNexusCore(
   const res = await fetch('/api/nexus/core', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ directive, employeesSummary, recentTasksSummary }),
+    body: JSON.stringify({
+      directive,
+      employeesSummary,
+      recentTasksSummary,
+      tokenPolicy,
+    }),
   });
-
-  if (res.status === 503) {
-    // Explicit Demo Mode notice (never masquerading as live AI)
-    const lower = directive.toLowerCase();
-    const isMarketing =
-      lower.includes('marketing') ||
-      lower.includes('campanha') ||
-      lower.includes('anúncio') ||
-      lower.includes('anuncio') ||
-      lower.includes('site') ||
-      lower.includes('venda') ||
-      lower.includes('tráfego') ||
-      lower.includes('social');
-
-    const targetDepartment: DepartmentId = isMarketing ? 'dept_marketing' : 'dept_products';
-    const leadEmployeeId = isMarketing ? 'emp_07' : 'emp_01';
-    const specialistId = isMarketing ? 'emp_08' : 'emp_02';
-
-    return {
-      mode: 'demo',
-      reply:
-        `[Modo de Demonstração Ativo — GEMINI_API_KEY não configurada no servidor]\n` +
-        `Entendi sua diretriz: "${directive}". Encaminhei a demanda para o departamento de ${
-          isMarketing ? 'Marketing e Comercial (2º Andar)' : 'Produtos e Desenvolvimento (1º Andar)'
-        }, estruturando tarefas iniciais no Quadro Visual para coordenação do gerente do andar.`,
-      targetDepartment,
-      leadEmployeeId,
-      requiresApproval: lower.includes('pagar') || lower.includes('publicar') || lower.includes('orçamento'),
-      subtasks: [
-        {
-          title: `Diagnóstico inicial: ${directive.slice(0, 42)}`,
-          description: `Levantamento estruturado solicitado pelo CEO: ${directive}`,
-          assigneeId: specialistId,
-          priority: 'alta',
-        },
-        {
-          title: `Consolidação executiva e plano de ação`,
-          description: `Revisão gerencial e preparação de entrega ao NEXUS CORE.`,
-          assigneeId: leadEmployeeId,
-          priority: 'media',
-        },
-      ],
-    };
-  }
 
   if (!res.ok) {
     const errPayload = await res.json().catch(() => ({}));
@@ -109,17 +135,29 @@ export async function sendDirectiveToNexusCore(
   const targetDepartment: DepartmentId =
     data.targetDepartment === 'dept_marketing' ? 'dept_marketing' : 'dept_products';
 
+  const validChannels: Set<string> = new Set([
+    'ch_google_search',
+    'ch_supabase',
+    'ch_google_ads',
+    'ch_meta_ads',
+    'ch_ecommerce',
+    'ch_whatsapp',
+  ]);
+
   return {
-    mode: 'live',
     reply: String(data.reply ?? 'Diretriz processada pelo NEXUS CORE.'),
     targetDepartment,
-    leadEmployeeId: String(data.leadEmployeeId ?? (targetDepartment === 'dept_marketing' ? 'emp_07' : 'emp_01')),
+    leadEmployeeId: String(
+      data.leadEmployeeId ?? (targetDepartment === 'dept_marketing' ? 'emp_07' : 'emp_01')
+    ),
     requiresApproval: Boolean(data.requiresApproval),
     subtasks: Array.isArray(data.subtasks)
       ? data.subtasks.map((st: Record<string, unknown>) => ({
           title: String(st.title ?? 'Subtarefa'),
           description: String(st.description ?? ''),
-          assigneeId: String(st.assigneeId ?? (targetDepartment === 'dept_marketing' ? 'emp_08' : 'emp_02')),
+          assigneeId: String(
+            st.assigneeId ?? (targetDepartment === 'dept_marketing' ? 'emp_08' : 'emp_02')
+          ),
           priority:
             st.priority === 'critica' ||
             st.priority === 'alta' ||
@@ -127,16 +165,24 @@ export async function sendDirectiveToNexusCore(
             st.priority === 'baixa'
               ? st.priority
               : 'media',
+          requiredChannelIds: Array.isArray(st.requiredChannelIds)
+            ? (st.requiredChannelIds.filter(
+                (c): c is ChannelId => typeof c === 'string' && validChannels.has(c)
+              ) as ChannelId[])
+            : ['ch_google_search'],
         }))
       : [],
+    tokenUsage: payload.tokenUsage ?? { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+    model: String(payload.model ?? 'gemini-4-hydrogen'),
   };
 }
 
 export async function sendMessageToEmployeeAgent(
   employee: EmployeeProfile,
   message: string,
-  activeTasks: TaskItem[]
-): Promise<{ mode: 'live' | 'demo'; reply: string }> {
+  activeTasks: TaskItem[],
+  tokenPolicy: TokenUsagePolicy
+): Promise<{ reply: string; tokenUsage: TokenUsageReport; model: string }> {
   const res = await fetch('/api/nexus/agent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -158,17 +204,9 @@ export async function sendMessageToEmployeeAgent(
         status: t.status,
         priority: t.priority,
       })),
+      tokenPolicy,
     }),
   });
-
-  if (res.status === 503) {
-    return {
-      mode: 'demo',
-      reply:
-        `[Modo de Demonstração Ativo] Olá CEO, sou ${employee.name} (${employee.role}). ` +
-        `Recebi sua mensagem sobre "${message}". Como a chave Gemini ainda não está ativa no servidor, estou operando no modo local de demonstração com foco em ${employee.specialty}.`,
-    };
-  }
 
   if (!res.ok) {
     const errPayload = await res.json().catch(() => ({}));
@@ -177,7 +215,126 @@ export async function sendMessageToEmployeeAgent(
 
   const data = await res.json();
   return {
-    mode: 'live',
     reply: String(data.reply ?? ''),
+    tokenUsage: data.tokenUsage ?? { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+    model: String(data.model ?? 'gemini-4-hydrogen'),
   };
+}
+
+export async function requestSupervisorAIReview(
+  supervisor: EmployeeProfile,
+  requester: EmployeeProfile,
+  task: TaskItem,
+  requiredChannelNames: string[],
+  tokenPolicy: TokenUsagePolicy
+): Promise<{ comment: string; tokenUsage: TokenUsageReport; model: string }> {
+  const res = await fetch('/api/nexus/supervisor-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      supervisor: { id: supervisor.id, name: supervisor.name, role: supervisor.role },
+      requester: { id: requester.id, name: requester.name, role: requester.role },
+      task: { id: task.id, title: task.title, description: task.description },
+      requiredChannelNames,
+      tokenPolicy,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message ?? 'Erro ao solicitar parecer do superior.');
+  }
+  return {
+    comment: String(data.comment ?? ''),
+    tokenUsage: data.tokenUsage ?? { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+    model: String(data.model ?? 'gemini-4-hydrogen'),
+  };
+}
+
+export async function executeTaskWithRealAI(
+  task: TaskItem,
+  employee: EmployeeProfile,
+  connectedChannelIds: ChannelId[],
+  tokenPolicy: TokenUsagePolicy
+): Promise<{
+  resultText: string;
+  groundingSources: GroundingSource[];
+  tokenUsage: TokenUsageReport;
+  model: string;
+}> {
+  const res = await fetch('/api/nexus/execute-task', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      task: {
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        permissionStatus: task.permissionStatus,
+        requiredChannelIds: task.requiredChannelIds,
+      },
+      employee: {
+        id: employee.id,
+        name: employee.name,
+        role: employee.role,
+        floor: employee.floor,
+        specialty: employee.specialty,
+      },
+      connectedChannelIds,
+      tokenPolicy,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message ?? 'Erro ao executar tarefa com IA.');
+  }
+  return {
+    resultText: String(data.resultText ?? ''),
+    groundingSources: Array.isArray(data.groundingSources) ? data.groundingSources : [],
+    tokenUsage: data.tokenUsage ?? { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+    model: String(data.model ?? 'gemini-4-hydrogen'),
+  };
+}
+
+export async function distillBrainThoughtWithAI(input: {
+  text: string;
+  actors: EmployeeProfile[];
+  skills: Array<{ id: string; name: string }>;
+  sourceType: 'conversation' | 'task_execution' | 'core_directive' | 'supervisor_review';
+  tokenPolicy: TokenUsagePolicy;
+}): Promise<{
+  important: boolean;
+  candidate: {
+    concept: string;
+    essence: string;
+    skillId: string;
+    importance: number;
+  } | null;
+  tokenUsage: TokenUsageReport;
+  model: string;
+} | null> {
+  try {
+    const res = await fetch('/api/nexus/brain/distill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: input.text,
+        actors: input.actors.map((a) => ({ id: a.id, name: a.name, role: a.role })),
+        skills: input.skills.map((s) => ({ id: s.id, name: s.name })),
+        sourceType: input.sourceType,
+        tokenPolicy: input.tokenPolicy,
+      }),
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const payload = await res.json();
+    return {
+      important: Boolean(payload.important),
+      candidate: payload.candidate ?? null,
+      tokenUsage: payload.tokenUsage ?? { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
+      model: String(payload.model ?? 'gemini-4-hydrogen'),
+    };
+  } catch {
+    return null;
+  }
 }

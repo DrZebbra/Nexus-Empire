@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   BookOpen,
@@ -14,21 +14,46 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import {
+  appendBrainThought,
+  evaluateLocalThoughtImportance,
+  incrementBrainFilteredOut,
+  setBrainMaxConnections,
+  type BrainThoughtCandidate,
+} from './core/brainRules';
+import {
+  approveTaskAtStage,
+  canExecuteTask,
   computeDashboardMetrics,
   createTaskInState,
+  nextUniqueId,
+  recordRealTaskExecution,
+  recordTokenUsage,
+  setChannelConnectionStatus,
   setEmployeeConversationPair,
   transitionTaskStatus,
   validateAndRegisterFunction,
 } from './core/simulationRules';
 import { INITIAL_NEXUS_STATE } from './data/seedData';
-import { fetchNexusServerStatus } from './services/aiService';
 import {
+  distillBrainThoughtWithAI,
+  executeTaskWithRealAI,
+  fetchNexusServerStatus,
+  requestSupervisorAIReview,
+  verifyOfficialChannel,
+  type TokenUsageReport,
+} from './services/aiService';
+import {
+  isSupabaseConfigured,
+  loadCloudNexusState,
   loadPersistedNexusState,
   resetLocalNexusState,
+  saveCloudNexusState,
   saveLocalNexusState,
 } from './services/supabaseService';
 import type {
+  ApprovalItem,
   AutonomyLevel,
+  ChannelId,
   CharacterAnimationState,
   CompanySettings,
   DepartmentId,
@@ -36,8 +61,10 @@ import type {
   NavSectionId,
   NexusState,
   ProductItem,
+  TaskItem,
   TaskPriority,
   TaskStatus,
+  TokenUsagePolicy,
 } from './types/nexus';
 import { CoreComputerModal } from './components/CoreComputerModal';
 import { EmployeeModal } from './components/EmployeeModal';
@@ -60,6 +87,7 @@ import {
   StoresView,
 } from './components/views/OperationsViews';
 import { TasksView } from './components/views/TasksView';
+import { BrainView } from './components/views/BrainView';
 
 export default function App() {
   const [entered, setEntered] = useState<boolean>(() => {
@@ -71,6 +99,18 @@ export default function App() {
     loadPersistedNexusState(INITIAL_NEXUS_STATE)
   );
   const [geminiConfigured, setGeminiConfigured] = useState(false);
+  const [supabaseConnected, setSupabaseConnected] = useState(() =>
+    isSupabaseConfigured()
+  );
+  const [supabaseSyncMessage, setSupabaseSyncMessage] = useState<string | null>(
+    null
+  );
+  const [channelVerifyError, setChannelVerifyError] = useState<string | null>(null);
+  const [verifyingChannelId, setVerifyingChannelId] = useState<ChannelId | null>(
+    null
+  );
+  const [executingTaskId, setExecutingTaskId] = useState<string | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
 
   const [activeSection, setActiveSection] = useState<NavSectionId>('hq');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -86,22 +126,101 @@ export default function App() {
     seq: number;
   } | null>(null);
 
+  const cloudHydratedRef = useRef(false);
+
   // Sync body state attribute for accessibility & verification
   useEffect(() => {
     document.body.dataset.state = entered ? 'playing' : 'title';
   }, [entered]);
 
-  // Probe server AI & Supabase configuration status
+  // Probe server AI, official channels & Supabase cloud state
   useEffect(() => {
-    fetchNexusServerStatus().then((status) => {
+    let active = true;
+    (async () => {
+      const status = await fetchNexusServerStatus();
+      if (!active) return;
+
       setGeminiConfigured(status.geminiConfigured);
-    });
+      const canQueryCloud = status.supabaseConfigured || isSupabaseConfigured();
+      if (!canQueryCloud) {
+        setSupabaseConnected(false);
+        cloudHydratedRef.current = true;
+        return;
+      }
+
+      const cloud = await loadCloudNexusState(
+        INITIAL_NEXUS_STATE.companyId,
+        INITIAL_NEXUS_STATE
+      );
+      if (!active) return;
+
+      const sbConnected = cloud.connected || status.supabaseConfigured || isSupabaseConfigured();
+      setSupabaseConnected(sbConnected);
+
+      if (cloud.state) {
+        setState(() => {
+          const loaded = cloud.state!;
+          if (sbConnected) {
+            const chSb = loaded.channels.find((c) => c.id === 'ch_supabase');
+            if (chSb && chSb.status !== 'connected') {
+              return setChannelConnectionStatus(
+                loaded,
+                'ch_supabase',
+                'connected',
+                'Supabase Cloud Conectado',
+                new Date().toISOString()
+              );
+            }
+          }
+          return loaded;
+        });
+        setSupabaseSyncMessage('Estado real sincronizado a partir do Supabase.');
+      } else if (sbConnected) {
+        setState((prev) => {
+          const chSb = prev.channels.find((c) => c.id === 'ch_supabase');
+          if (chSb && chSb.status !== 'connected') {
+            return setChannelConnectionStatus(
+              prev,
+              'ch_supabase',
+              'connected',
+              'Supabase Cloud Conectado',
+              new Date().toISOString()
+            );
+          }
+          return prev;
+        });
+        if (cloud.error) {
+          setSupabaseSyncMessage(`Aviso Supabase: ${cloud.error}`);
+        }
+      }
+
+      cloudHydratedRef.current = true;
+    })();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // Persist changes locally
+  // Persist changes locally and sync with Supabase when connected
   useEffect(() => {
     saveLocalNexusState(state);
-  }, [state]);
+    if (!cloudHydratedRef.current || !supabaseConnected) return;
+
+    const timer = window.setTimeout(() => {
+      saveCloudNexusState(state).then((res) => {
+        if (res.ok) {
+          setSupabaseSyncMessage(
+            `Sincronizado com Supabase às ${new Date().toLocaleTimeString('pt-BR')}.`
+          );
+        } else if (res.error) {
+          setSupabaseSyncMessage(`Falha ao sincronizar Supabase: ${res.error}`);
+        }
+      });
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [state, supabaseConnected]);
 
   const handleStart = useCallback(() => {
     document.body.dataset.state = 'playing';
@@ -121,19 +240,26 @@ export default function App() {
       setState((prev) => ({
         ...prev,
         employees: prev.employees.map((emp) => {
+          const hasInProgress = prev.tasks.some(
+            (t) => t.assigneeId === emp.id && t.status === 'em_execucao'
+          );
           if (emp.departmentId === departmentId && emp.isFloorManager) {
             return {
               ...emp,
-              animationState: 'working',
+              animationState: hasInProgress ? 'working' : 'idle',
               activeWorkflowAction: 'none',
-              currentActivityLabel: `Monitorando operações do ${emp.floor}º Andar`,
+              currentActivityLabel: hasInProgress
+                ? `Monitorando operações do ${emp.floor}º Andar`
+                : 'Aguardando tarefa real do CEO',
             };
           }
           if (emp.animationState === 'celebrating') {
             return {
               ...emp,
-              animationState: 'working',
-              currentActivityLabel: `Operando estação: ${emp.specialty}`,
+              animationState: hasInProgress ? 'working' : 'idle',
+              currentActivityLabel: hasInProgress
+                ? `Operando estação: ${emp.specialty}`
+                : 'Aguardando tarefa real',
             };
           }
           return emp;
@@ -151,8 +277,10 @@ export default function App() {
       priority: TaskPriority;
       dueDate: string;
       isFinancialOrIrreversible?: boolean;
+      requiredChannelIds?: ChannelId[];
     }) => {
       const nowIso = new Date().toISOString();
+      setExecutionError(null);
       setState((prev) => createTaskInState(prev, input, nowIso));
       scheduleManagerReturn(input.departmentId);
     },
@@ -163,19 +291,27 @@ export default function App() {
     (taskId: string, nextStatus: TaskStatus, resultSummary?: string) => {
       const nowIso = new Date().toISOString();
       let deptToReturn: DepartmentId | null = null;
+      setExecutionError(null);
       setState((prev) => {
-        const task = prev.tasks.find((t) => t.id === taskId);
-        if (task && nextStatus === 'concluida') {
-          deptToReturn = task.departmentId;
+        try {
+          const task = prev.tasks.find((t) => t.id === taskId);
+          if (task && nextStatus === 'concluida') {
+            deptToReturn = task.departmentId;
+          }
+          return transitionTaskStatus(
+            prev,
+            taskId,
+            nextStatus,
+            resultSummary,
+            prev.settings.ceoName,
+            nowIso
+          );
+        } catch (err) {
+          setExecutionError(
+            err instanceof Error ? err.message : 'Transição não autorizada.'
+          );
+          return prev;
         }
-        return transitionTaskStatus(
-          prev,
-          taskId,
-          nextStatus,
-          resultSummary,
-          prev.settings.ceoName,
-          nowIso
-        );
       });
       if (deptToReturn) {
         scheduleManagerReturn(deptToReturn);
@@ -201,7 +337,7 @@ export default function App() {
       const labelMap: Record<CharacterAnimationState, string> = {
         working: 'Trabalhando no computador',
         walking: 'Em deslocamento pelo andar',
-        idle: 'Aguardando próxima instrução',
+        idle: 'Aguardando tarefa real',
         conversing: 'Em alinhamento com equipe',
         celebrating: 'Comemorando entrega concluída',
         thinking: 'Analisando estratégia',
@@ -214,7 +350,8 @@ export default function App() {
             ? {
                 ...e,
                 animationState: animState,
-                conversingWithId: animState === 'conversing' ? e.conversingWithId : null,
+                conversingWithId:
+                  animState === 'conversing' ? e.conversingWithId : null,
                 activeWorkflowAction: 'none',
                 currentActivityLabel: labelMap[animState],
               }
@@ -225,55 +362,220 @@ export default function App() {
     []
   );
 
+  const stateLatestRef = useRef(state);
+  stateLatestRef.current = state;
+
+  const distillAndAppendThought = useCallback(
+    async (params: {
+      text: string;
+      actorIds: string[];
+      sourceType: 'conversation' | 'task_execution' | 'core_directive' | 'supervisor_review';
+      hasActiveTask?: boolean;
+      useAiRefinement?: boolean;
+    }) => {
+      const snapshot = stateLatestRef.current;
+      if (snapshot.brain.nodes.length >= snapshot.brain.maxConnections) {
+        return;
+      }
+
+      const actors = snapshot.employees.filter((e) =>
+        params.actorIds.includes(e.id)
+      );
+      if (actors.length === 0) return;
+
+      const localEval = evaluateLocalThoughtImportance({
+        text: params.text,
+        actors,
+        skills: snapshot.skills,
+        sourceType: params.sourceType,
+        hasActiveTask: params.hasActiveTask,
+      });
+
+      if (!localEval.important || !localEval.candidate) {
+        setState((prev) => incrementBrainFilteredOut(prev));
+        return;
+      }
+
+      let finalCandidate: BrainThoughtCandidate = localEval.candidate;
+      let aiTokens: TokenUsageReport | null = null;
+      let aiModel = 'gemini-4-hydrogen';
+
+      const withinTokenBudget =
+        snapshot.tokenPolicy.usedTotal < snapshot.tokenPolicy.dailyLimit;
+
+      if (params.useAiRefinement && geminiConfigured && withinTokenBudget) {
+        const aiDistill = await distillBrainThoughtWithAI({
+          text: params.text,
+          actors,
+          skills: snapshot.skills,
+          sourceType: params.sourceType,
+          tokenPolicy: snapshot.tokenPolicy,
+        });
+        if (aiDistill) {
+          aiTokens = aiDistill.tokenUsage;
+          aiModel = aiDistill.model;
+          if (!aiDistill.important || !aiDistill.candidate) {
+            setState((prev) => incrementBrainFilteredOut(prev));
+            return;
+          }
+          const validSkillId = snapshot.skills.some(
+            (s) => s.id === aiDistill.candidate!.skillId
+          )
+            ? aiDistill.candidate.skillId
+            : localEval.candidate.skillId;
+
+          finalCandidate = {
+            ...localEval.candidate,
+            skillId: validSkillId,
+            concept: aiDistill.candidate.concept || localEval.candidate.concept,
+            essence: aiDistill.candidate.essence || localEval.candidate.essence,
+            importance: Math.max(
+              0.65,
+              Math.min(1, Number(aiDistill.candidate.importance) || 0.78)
+            ),
+          };
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      setState((prev) => {
+        let next = appendBrainThought(prev, finalCandidate, nowIso);
+        if (aiTokens && aiTokens.totalTokens > 0) {
+          next = recordTokenUsage(next, {
+            timestamp: nowIso,
+            actorName: 'Nexus Mind',
+            action: 'brain_distill',
+            promptTokens: aiTokens.promptTokens,
+            candidatesTokens: aiTokens.candidatesTokens,
+            totalTokens: aiTokens.totalTokens,
+            model: aiModel,
+          });
+        }
+        return next;
+      });
+    },
+    [geminiConfigured]
+  );
+
+  const handleUpdateBrainLimit = useCallback((nextLimit: number) => {
+    setState((prev) => setBrainMaxConnections(prev, nextLimit));
+  }, []);
+
   const handleStartConversation = useCallback(
     (employeeAId: string, employeeBId: string | null) => {
+      const snapshot = stateLatestRef.current;
+      const empA = snapshot.employees.find((e) => e.id === employeeAId);
+      const empB = employeeBId
+        ? snapshot.employees.find((e) => e.id === employeeBId)
+        : null;
+
       setState((prev) => ({
         ...prev,
-        employees: setEmployeeConversationPair(prev.employees, employeeAId, employeeBId),
+        employees: setEmployeeConversationPair(
+          prev.employees,
+          employeeAId,
+          employeeBId
+        ),
       }));
+
+      if (empA && empB) {
+        const skillA =
+          snapshot.skills.find((s) => empA.skillIds.includes(s.id))?.name ??
+          empA.specialty;
+        const skillB =
+          snapshot.skills.find((s) => empB.skillIds.includes(s.id))?.name ??
+          empB.specialty;
+        const sharedTask = snapshot.tasks.find(
+          (t) =>
+            (t.assigneeId === empA.id || t.assigneeId === empB.id) &&
+            t.status !== 'concluida'
+        );
+        const dialogueText = sharedTask
+          ? `Alinhamento técnico entre ${empA.name} (${skillA}) e ${empB.name} (${skillB}) sobre a tarefa "${sharedTask.title}": critérios de execução e validação de canais.`
+          : `Sinergia operacional entre ${empA.name} (${skillA}) e ${empB.name} (${skillB}) conectando estratégia do ${empA.floor}º andar e execução de ${skillB}.`;
+
+        void distillAndAppendThought({
+          text: dialogueText,
+          actorIds: [empA.id, empB.id],
+          sourceType: 'conversation',
+          hasActiveTask: Boolean(sharedTask),
+          useAiRefinement: false,
+        });
+      }
     },
-    []
+    [distillAndAppendThought]
   );
 
   const handleAppendEmployeeChat = useCallback(
-    (employeeId: string, ceoMsg: string, replyMsg: string, isDemo: boolean) => {
+    (
+      employeeId: string,
+      ceoMsg: string,
+      replyMsg: string,
+      tokenUsage: TokenUsageReport,
+      model: string
+    ) => {
       const now = new Date().toISOString();
-      setState((prev) => ({
-        ...prev,
-        employees: prev.employees.map((emp) => {
-          if (emp.id !== employeeId) return emp;
-          return {
-            ...emp,
-            conversationHistory: [
-              ...emp.conversationHistory,
-              {
-                id: `m_ceo_${Date.now()}`,
-                sender: 'ceo',
-                senderName: prev.settings.ceoName,
-                content: ceoMsg,
-                timestamp: now,
-              },
-              {
-                id: `m_emp_${Date.now() + 1}`,
-                sender: 'employee',
-                senderName: emp.name,
-                content: replyMsg,
-                timestamp: now,
-                isDemo,
-              },
-            ],
-          };
-        }),
-      }));
+      setState((prev) => {
+        const emp = prev.employees.find((e) => e.id === employeeId);
+        let next: NexusState = {
+          ...prev,
+          employees: prev.employees.map((item) => {
+            if (item.id !== employeeId) return item;
+            return {
+              ...item,
+              conversationHistory: [
+                ...item.conversationHistory,
+                {
+                  id: nextUniqueId('m_ceo'),
+                  sender: 'ceo',
+                  senderName: prev.settings.ceoName,
+                  content: ceoMsg,
+                  timestamp: now,
+                },
+                {
+                  id: nextUniqueId('m_emp'),
+                  sender: 'employee',
+                  senderName: item.name,
+                  content: replyMsg,
+                  timestamp: now,
+                  tokensUsed: tokenUsage.totalTokens,
+                },
+              ],
+            };
+          }),
+        };
+        if (tokenUsage.totalTokens > 0) {
+          next = recordTokenUsage(next, {
+            timestamp: now,
+            actorName: emp?.name ?? 'Agente',
+            action: 'agent_chat',
+            promptTokens: tokenUsage.promptTokens,
+            candidatesTokens: tokenUsage.candidatesTokens,
+            totalTokens: tokenUsage.totalTokens,
+            model,
+          });
+        }
+        return next;
+      });
+      void distillAndAppendThought({
+        text: `${ceoMsg} -> ${replyMsg}`,
+        actorIds: [employeeId],
+        sourceType: 'conversation',
+        hasActiveTask: stateLatestRef.current.tasks.some(
+          (t) => t.assigneeId === employeeId && t.status !== 'concluida'
+        ),
+        useAiRefinement: true,
+      });
     },
-    []
+    [distillAndAppendThought]
   );
 
   const handleRecordCoreExchange = useCallback(
     (
       ceoText: string,
       coreReply: string,
-      isDemo: boolean,
+      tokenUsage: TokenUsageReport,
+      model: string,
       plan: {
         targetDepartment: DepartmentId;
         assignedEmployeeId: string;
@@ -282,29 +584,30 @@ export default function App() {
           description: string;
           assigneeId: string;
           priority: TaskPriority;
+          requiredChannelIds: ChannelId[];
         }>;
       }
     ) => {
       const now = new Date().toISOString();
       setState((prev) => {
-        let next = {
+        let next: NexusState = {
           ...prev,
           nexusCoreMessages: [
             ...prev.nexusCoreMessages,
             {
-              id: `nc_ceo_${Date.now()}`,
+              id: nextUniqueId('nc_ceo'),
               sender: 'ceo' as const,
               senderName: prev.settings.ceoName,
               content: ceoText,
               timestamp: now,
             },
             {
-              id: `nc_core_${Date.now() + 1}`,
+              id: nextUniqueId('nc_core'),
               sender: 'nexus_core' as const,
               senderName: 'NEXUS CORE',
               content: coreReply,
               timestamp: now,
-              isDemo,
+              tokensUsed: tokenUsage.totalTokens,
               structuredPlan: {
                 targetDepartment: plan.targetDepartment,
                 assignedEmployeeId: plan.assignedEmployeeId,
@@ -318,6 +621,18 @@ export default function App() {
           ],
         };
 
+        if (tokenUsage.totalTokens > 0) {
+          next = recordTokenUsage(next, {
+            timestamp: now,
+            actorName: 'NEXUS CORE',
+            action: 'core',
+            promptTokens: tokenUsage.promptTokens,
+            candidatesTokens: tokenUsage.candidatesTokens,
+            totalTokens: tokenUsage.totalTokens,
+            model,
+          });
+        }
+
         for (const st of plan.subtasks) {
           const validAssignee = next.employees.some((e) => e.id === st.assigneeId)
             ? st.assigneeId
@@ -330,7 +645,10 @@ export default function App() {
               assigneeId: validAssignee,
               departmentId: plan.targetDepartment,
               priority: st.priority,
-              dueDate: new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 10),
+              dueDate: new Date(Date.now() + 86400000 * 3)
+                .toISOString()
+                .slice(0, 10),
+              requiredChannelIds: st.requiredChannelIds,
             },
             now
           );
@@ -338,50 +656,288 @@ export default function App() {
         return next;
       });
       scheduleManagerReturn(plan.targetDepartment);
+      const subtaskNames = plan.subtasks.map((s) => s.title).join('; ');
+      void distillAndAppendThought({
+        text: `Diretriz NEXUS CORE "${ceoText}": ${coreReply}${
+          subtaskNames ? ` | Subtarefas: ${subtaskNames}` : ''
+        }`,
+        actorIds: [plan.assignedEmployeeId],
+        sourceType: 'core_directive',
+        hasActiveTask: true,
+        useAiRefinement: true,
+      });
     },
-    [scheduleManagerReturn]
+    [scheduleManagerReturn, distillAndAppendThought]
   );
 
   const handleResolveApproval = useCallback(
-    (approvalId: string, decision: 'approved' | 'rejected') => {
+    (
+      approvalId: string,
+      stageActor: 'supervisor' | 'ceo',
+      decision: 'approved' | 'rejected',
+      comment?: string,
+      tokenUsage?: { usage: TokenUsageReport; actorName: string; model: string }
+    ) => {
       const now = new Date().toISOString();
+      setExecutionError(null);
       setState((prev) => {
-        const target = prev.approvals.find((a) => a.id === approvalId);
-        let nextTasks = prev.tasks;
-        if (target?.relatedTaskId) {
-          nextTasks = prev.tasks.map((t) =>
-            t.id === target.relatedTaskId
-              ? {
-                  ...t,
-                  status: decision === 'approved' ? 'em_execucao' : 'cancelada',
-                  requiresApproval: false,
-                }
-              : t
-          );
+        let next = approveTaskAtStage(
+          prev,
+          approvalId,
+          stageActor,
+          decision,
+          comment,
+          now
+        );
+        if (tokenUsage && tokenUsage.usage.totalTokens > 0) {
+          next = recordTokenUsage(next, {
+            timestamp: now,
+            actorName: tokenUsage.actorName,
+            action: 'supervisor_review',
+            promptTokens: tokenUsage.usage.promptTokens,
+            candidatesTokens: tokenUsage.usage.candidatesTokens,
+            totalTokens: tokenUsage.usage.totalTokens,
+            model: tokenUsage.model,
+          });
         }
-        return {
-          ...prev,
-          tasks: nextTasks,
-          approvals: prev.approvals.map((a) =>
-            a.id === approvalId ? { ...a, status: decision } : a
-          ),
-          activityLogs: [
-            {
-              id: `log_apr_${Date.now()}`,
-              timestamp: now,
-              actorName: prev.settings.ceoName,
-              departmentId: target?.departmentId ?? 'nexus_core',
-              action: decision === 'approved' ? 'Aprovação concedida' : 'Solicitação recusada',
-              detail: target?.title ?? approvalId,
-              isDemoData: true,
-            },
-            ...prev.activityLogs,
-          ],
-        };
+        return next;
       });
+
+      if (decision === 'approved') {
+        const apr = stateLatestRef.current.approvals.find((a) => a.id === approvalId);
+        if (apr) {
+          void distillAndAppendThought({
+            text: `Permissão concedida (${stageActor === 'supervisor' ? 'Superior' : 'CEO'}) para "${apr.title}": ${comment ?? apr.description}`,
+            actorIds: [apr.requestedByEmployeeId, apr.supervisorId],
+            sourceType: 'supervisor_review',
+            hasActiveTask: true,
+            useAiRefinement: false,
+          });
+        }
+      }
+    },
+    [distillAndAppendThought]
+  );
+
+  const handleSupervisorAIReview = useCallback(
+    async (apr: ApprovalItem) => {
+      const supervisor = state.employees.find((e) => e.id === apr.supervisorId);
+      const requester = state.employees.find(
+        (e) => e.id === apr.requestedByEmployeeId
+      );
+      const task = state.tasks.find((t) => t.id === apr.relatedTaskId);
+      if (!supervisor || !requester || !task) {
+        handleResolveApproval(apr.id, 'supervisor', 'approved');
+        return;
+      }
+      setExecutionError(null);
+      try {
+        const reqChannelNames = task.requiredChannelIds.map(
+          (id) => state.channels.find((c) => c.id === id)?.name ?? id
+        );
+        const res = await requestSupervisorAIReview(
+          supervisor,
+          requester,
+          task,
+          reqChannelNames,
+          state.tokenPolicy
+        );
+        handleResolveApproval(apr.id, 'supervisor', 'approved', res.comment, {
+          usage: res.tokenUsage,
+          actorName: supervisor.name,
+          model: res.model,
+        });
+      } catch (err) {
+        setExecutionError(
+          err instanceof Error
+            ? err.message
+            : 'Falha ao gerar parecer real do superior.'
+        );
+      }
+    },
+    [state.employees, state.tasks, state.channels, state.tokenPolicy, handleResolveApproval]
+  );
+
+  const handleExecuteTaskReal = useCallback(
+    async (task: TaskItem) => {
+      const gate = canExecuteTask(state, task);
+      if (!gate.allowed) {
+        setExecutionError(gate.reason);
+        return;
+      }
+      const employee = state.employees.find((e) => e.id === task.assigneeId);
+      if (!employee) {
+        setExecutionError('Especialista executor não encontrado.');
+        return;
+      }
+
+      setExecutionError(null);
+      setExecutingTaskId(task.id);
+      setState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.map((t) =>
+          t.id === task.id ? { ...t, status: 'em_execucao' } : t
+        ),
+        employees: prev.employees.map((e) =>
+          e.id === employee.id
+            ? {
+                ...e,
+                animationState: 'working',
+                activeWorkflowAction: 'none',
+                currentActivityLabel: `Executando via canais oficiais: ${task.title.slice(0, 22)}`,
+              }
+            : e
+        ),
+      }));
+
+      try {
+        const connectedChannelIds = state.channels
+          .filter((c) => c.status === 'connected')
+          .map((c) => c.id);
+
+        const res = await executeTaskWithRealAI(
+          task,
+          employee,
+          connectedChannelIds,
+          state.tokenPolicy
+        );
+        const nowIso = new Date().toISOString();
+        setState((prev) =>
+          recordRealTaskExecution(
+            prev,
+            task.id,
+            {
+              resultText: res.resultText,
+              groundingSources: res.groundingSources,
+              promptTokens: res.tokenUsage.promptTokens,
+              candidatesTokens: res.tokenUsage.candidatesTokens,
+              totalTokens: res.tokenUsage.totalTokens,
+              model: res.model,
+            },
+            nowIso
+          )
+        );
+        scheduleManagerReturn(task.departmentId);
+        void distillAndAppendThought({
+          text: `Entrega concluída "${task.title}": ${res.resultText.slice(0, 320)}`,
+          actorIds: [employee.id],
+          sourceType: 'task_execution',
+          hasActiveTask: true,
+          useAiRefinement: true,
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Erro na execução real da tarefa.';
+        setExecutionError(message);
+        setState((prev) => ({
+          ...prev,
+          tasks: prev.tasks.map((t) =>
+            t.id === task.id ? { ...t, status: 'planejada' } : t
+          ),
+          employees: prev.employees.map((e) =>
+            e.id === employee.id
+              ? {
+                  ...e,
+                  animationState: 'idle',
+                  currentActivityLabel: 'Execução interrompida — verificar erro',
+                }
+              : e
+          ),
+        }));
+      } finally {
+        setExecutingTaskId(null);
+      }
+    },
+    [state, scheduleManagerReturn, distillAndAppendThought]
+  );
+
+  const handleConnectChannel = useCallback(async (channelId: ChannelId) => {
+    setChannelVerifyError(null);
+    setVerifyingChannelId(channelId);
+    try {
+      if (channelId === 'ch_supabase' && isSupabaseConfigured()) {
+        const nowIso = new Date().toISOString();
+        setSupabaseConnected(true);
+        setState((prev) =>
+          setChannelConnectionStatus(
+            prev,
+            'ch_supabase',
+            'connected',
+            'Supabase Client Oficial Conectado',
+            nowIso
+          )
+        );
+        return;
+      }
+
+      const res = await verifyOfficialChannel(channelId);
+      setState((prev) =>
+        setChannelConnectionStatus(
+          prev,
+          channelId,
+          'connected',
+          res.accountLabel,
+          res.verifiedAt
+        )
+      );
+      if (channelId === 'ch_supabase') {
+        setSupabaseConnected(true);
+      }
+    } catch (err) {
+      setChannelVerifyError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível verificar as credenciais oficiais deste canal.'
+      );
+    } finally {
+      setVerifyingChannelId(null);
+    }
+  }, []);
+
+  const handleDisconnectChannel = useCallback((channelId: ChannelId) => {
+    setChannelVerifyError(null);
+    setState((prev) =>
+      setChannelConnectionStatus(
+        prev,
+        channelId,
+        'disconnected',
+        undefined,
+        new Date().toISOString()
+      )
+    );
+  }, []);
+
+  const handleUpdateTokenPolicy = useCallback(
+    (patch: Partial<TokenUsagePolicy>) => {
+      setState((prev) => ({
+        ...prev,
+        tokenPolicy: { ...prev.tokenPolicy, ...patch },
+      }));
     },
     []
   );
+
+  const handleSyncSupabaseNow = useCallback(async () => {
+    const res = await saveCloudNexusState(state);
+    if (res.ok) {
+      setSupabaseConnected(true);
+      setSupabaseSyncMessage(
+        `Sincronizado manualmente com Supabase às ${new Date().toLocaleTimeString('pt-BR')}.`
+      );
+    } else {
+      setSupabaseSyncMessage(
+        res.error ??
+          'Supabase não configurado no ambiente atual (configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY).'
+      );
+    }
+  }, [state]);
+
+  const handleResetWorkspace = useCallback(() => {
+    resetLocalNexusState();
+    setExecutionError(null);
+    setChannelVerifyError(null);
+    setState(INITIAL_NEXUS_STATE);
+  }, []);
 
   const joaoConversingWithMaria = useMemo(() => {
     const joao = state.employees.find((e) => e.id === 'emp_01');
@@ -401,6 +957,7 @@ export default function App() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
         pendingApprovalsCount={metrics.pendingApprovalsCount}
         pendingTasksCount={metrics.tasksPending + metrics.tasksInProgress}
+        brainConnectionsCount={state.brain.nodes.length}
       />
 
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
@@ -416,7 +973,11 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
             <span className="font-display font-bold text-sm sm:text-base text-slate-100 whitespace-nowrap truncate">
-              {activeSection === 'hq' ? 'Sede 3D · NEXUS EMPIRE' : 'NEXUS EMPIRE'}
+              {activeSection === 'hq'
+                ? 'Sede 3D · NEXUS EMPIRE'
+                : activeSection === 'brain'
+                ? 'Cérebro Neural · Nexus Mind'
+                : 'NEXUS EMPIRE'}
             </span>
           </div>
 
@@ -472,14 +1033,29 @@ export default function App() {
 
               {/* Top-left compact HUD status */}
               <div className="pointer-events-none absolute top-3 left-3 z-20 hidden sm:flex items-center gap-3 px-3.5 py-2 rounded-lg border border-slate-800 bg-[#0B0F14]/90 text-xs text-slate-300">
-                <span>Ativos: <strong className="font-mono text-emerald-400">{metrics.activeEmployeesCount}/12</strong></span>
+                <span>
+                  Ativos:{' '}
+                  <strong className="font-mono text-emerald-400">
+                    {metrics.activeEmployeesCount}/12
+                  </strong>
+                </span>
                 <span aria-hidden="true">·</span>
-                <span>Tarefas: <strong className="font-mono text-cyan-300">{metrics.tasksInProgress + metrics.tasksPending}</strong></span>
+                <span>
+                  Tarefas:{' '}
+                  <strong className="font-mono text-cyan-300">
+                    {metrics.tasksInProgress + metrics.tasksPending + metrics.tasksAwaitingApproval}
+                  </strong>
+                </span>
                 <span aria-hidden="true">·</span>
-                <span>Histórico: <strong className="font-mono text-blue-300">{metrics.historicalRecordsCount}</strong></span>
+                <span>
+                  Canais:{' '}
+                  <strong className="font-mono text-blue-300">
+                    {metrics.connectedChannelsCount}/{metrics.totalChannelsCount}
+                  </strong>
+                </span>
               </div>
 
-              {/* Unified Collapsible Bottom Dock (Zero Viewport Occlusion) */}
+              {/* Unified Collapsible Bottom Dock */}
               <div className="pointer-events-none fixed lg:absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center max-w-[96vw]">
                 <button
                   type="button"
@@ -570,7 +1146,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* Toggle Bubbles & Quick Conversation Demo */}
+                    {/* Toggle Bubbles & Direct 3D Conversation */}
                     <button
                       type="button"
                       onClick={() => setShowBubbles((b) => !b)}
@@ -600,22 +1176,24 @@ export default function App() {
                     >
                       <MessageCircle className="w-3.5 h-3.5 text-violet-400" />
                       <span>
-                        {joaoConversingWithMaria
-                          ? 'Voltar ao PC'
-                          : 'João & Maria'}
+                        {joaoConversingWithMaria ? 'Voltar ao PC' : 'João & Maria'}
                       </span>
                     </button>
                   </div>
                 )}
               </div>
             </div>
+          ) : activeSection === 'brain' ? (
+            <BrainView state={state} onUpdateLimit={handleUpdateBrainLimit} />
           ) : activeSection === 'dashboard' ? (
             <DashboardView
               state={state}
               geminiConfigured={geminiConfigured}
+              supabaseConnected={supabaseConnected}
               onSelectEmployee={(id) => setSelectedEmployeeId(id)}
               onOpenCoreComputer={() => setCoreComputerOpen(true)}
               onOpenNexusCore={() => setNexusCoreOpen(true)}
+              onGoToSettings={() => setActiveSection('settings')}
             />
           ) : activeSection === 'employees' ? (
             <EmployeesView
@@ -636,7 +1214,7 @@ export default function App() {
                   ...prev,
                   interDeptRequests: [
                     {
-                      id: `idr_${Date.now()}`,
+                      id: nextUniqueId('idr'),
                       fromDepartmentId: req.fromDepartmentId,
                       toDepartmentId: req.toDepartmentId,
                       fromEmployeeId:
@@ -676,7 +1254,7 @@ export default function App() {
                 setState((prev) => ({
                   ...prev,
                   products: [
-                    { ...p, id: `prod_${Date.now()}`, marginPercent },
+                    { ...p, id: nextUniqueId('prod'), marginPercent },
                     ...prev.products,
                   ],
                 }));
@@ -725,12 +1303,17 @@ export default function App() {
             />
           ) : activeSection === 'tasks' ? (
             <TasksView
-              tasks={state.tasks}
-              employees={state.employees}
+              state={state}
               initialBoardFloor={taskBoardInitialFloor}
+              executingTaskId={executingTaskId}
+              executionError={executionError}
               onCreateTask={handleCreateTask}
+              onResolveApproval={handleResolveApproval}
+              onSupervisorAIReview={handleSupervisorAIReview}
+              onExecuteTaskReal={handleExecuteTaskReal}
               onTransitionStatus={handleTransitionTaskStatus}
               onOpenCoreComputer={() => setCoreComputerOpen(true)}
+              onGoToSettings={() => setActiveSection('settings')}
             />
           ) : activeSection === 'automations' ? (
             <AutomationsView
@@ -774,18 +1357,23 @@ export default function App() {
             />
           ) : (
             <SettingsView
-              settings={state.settings}
+              state={state}
               geminiConfigured={geminiConfigured}
+              supabaseConnected={supabaseConnected}
+              supabaseSyncMessage={supabaseSyncMessage}
+              channelVerifyError={channelVerifyError}
+              verifyingChannelId={verifyingChannelId}
               onUpdateSettings={(patch: Partial<CompanySettings>) =>
                 setState((prev) => ({
                   ...prev,
                   settings: { ...prev.settings, ...patch },
                 }))
               }
-              onResetDemoData={() => {
-                resetLocalNexusState();
-                setState(INITIAL_NEXUS_STATE);
-              }}
+              onUpdateTokenPolicy={handleUpdateTokenPolicy}
+              onConnectChannel={handleConnectChannel}
+              onDisconnectChannel={handleDisconnectChannel}
+              onSyncSupabaseNow={handleSyncSupabaseNow}
+              onResetWorkspace={handleResetWorkspace}
             />
           )}
         </main>
@@ -797,6 +1385,8 @@ export default function App() {
         allEmployees={state.employees}
         skills={state.skills}
         tools={state.tools}
+        channels={state.channels}
+        tokenPolicy={state.tokenPolicy}
         tasks={state.tasks}
         geminiConfigured={geminiConfigured}
         onClose={() => setSelectedEmployeeId(null)}
@@ -815,6 +1405,8 @@ export default function App() {
         employees={state.employees}
         tasks={state.tasks}
         approvals={state.approvals}
+        channels={state.channels}
+        tokenPolicy={state.tokenPolicy}
         geminiConfigured={geminiConfigured}
         onRecordCoreExchange={handleRecordCoreExchange}
         onResolveApproval={handleResolveApproval}

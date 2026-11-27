@@ -40,7 +40,22 @@ export type NavSectionId =
   | 'finance'
   | 'functions'
   | 'reports'
+  | 'brain'
   | 'settings';
+
+export type ChannelId =
+  | 'ch_google_search'
+  | 'ch_supabase'
+  | 'ch_google_ads'
+  | 'ch_meta_ads'
+  | 'ch_ecommerce'
+  | 'ch_whatsapp';
+
+export type TaskPermissionStatus =
+  | 'pending_supervisor'
+  | 'pending_ceo'
+  | 'approved'
+  | 'rejected';
 
 export type HairStyle =
   | 'short_parted'
@@ -99,11 +114,16 @@ export interface ConversationMessage {
   senderName: string;
   content: string;
   timestamp: string;
-  isDemo?: boolean;
+  tokensUsed?: number;
   structuredPlan?: {
     targetDepartment: DepartmentId;
     assignedEmployeeId: string;
-    subtasks: Array<{ title: string; assigneeId: string; priority: TaskPriority }>;
+    subtasks: Array<{
+      title: string;
+      assigneeId: string;
+      priority: TaskPriority;
+      requiredChannelIds?: ChannelId[];
+    }>;
   };
 }
 
@@ -118,7 +138,7 @@ export interface EmployeeProfile {
   specialty: string;
   instructions: string;
   experienceLevel: number;
-  productivity: number; // 0-100 derived or baseline
+  productivity: number; // 0-100 derived strictly from real completed tasks
   autonomyLevel: AutonomyLevel;
   animationState: CharacterAnimationState;
   currentActivityLabel: string;
@@ -158,6 +178,39 @@ export interface ToolDefinition {
   description: string;
 }
 
+export interface ChannelConnection {
+  id: ChannelId;
+  name: string;
+  provider: string;
+  description: string;
+  status: 'disconnected' | 'connected';
+  requiresServerSecret: string;
+  officialAuthType: 'gemini_grounding' | 'supabase_rls' | 'oauth_or_api';
+  connectedAt: string | null;
+  accountLabel?: string;
+}
+
+export interface TokenUsagePolicy {
+  dailyLimit: number;
+  perTaskLimit: number;
+  usedTotal: number;
+  promptTokensTotal: number;
+  completionTokensTotal: number;
+  lastResetDate: string;
+}
+
+export interface TokenUsageEntry {
+  id: string;
+  timestamp: string;
+  actorName: string;
+  taskId?: string;
+  action: 'core' | 'agent_chat' | 'task_execution' | 'supervisor_review' | 'brain_distill';
+  promptTokens: number;
+  candidatesTokens: number;
+  totalTokens: number;
+  model: string;
+}
+
 export interface FunctionParameter {
   name: string;
   type: 'string' | 'number' | 'boolean' | 'select';
@@ -189,6 +242,11 @@ export interface TaskStep {
   assigneeId: string;
 }
 
+export interface GroundingSource {
+  title: string;
+  uri: string;
+}
+
 export interface TaskItem {
   id: string;
   title: string;
@@ -204,6 +262,13 @@ export interface TaskItem {
   result: string | null;
   requiresApproval: boolean;
   isFinancialOrIrreversible: boolean;
+  requiredChannelIds: ChannelId[];
+  permissionStatus: TaskPermissionStatus;
+  supervisorId: string;
+  supervisorNote?: string;
+  tokensUsed?: number;
+  groundingSources?: GroundingSource[];
+  executedAt?: string;
   history: Array<{ timestamp: string; actor: string; note: string }>;
 }
 
@@ -213,8 +278,12 @@ export interface ApprovalItem {
   description: string;
   requestedByEmployeeId: string;
   departmentId: DepartmentId;
-  category: 'finance' | 'publication' | 'task_result' | 'irreversible';
+  category: 'finance' | 'publication' | 'task_result' | 'irreversible' | 'channel_permission';
   relatedTaskId?: string;
+  stage: 'supervisor' | 'ceo';
+  supervisorId: string;
+  supervisorApproved: boolean;
+  supervisorComment?: string;
   amount?: number;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
@@ -230,6 +299,8 @@ export interface HistoricalLedgerEntry {
   loggedByManagerName: string;
   executedByEmployeeName: string;
   outcomeSummary: string;
+  tokensUsed?: number;
+  sourcesCount?: number;
   recordedAt: string;
 }
 
@@ -328,7 +399,7 @@ export interface IntegrationConfig {
   provider: string;
   category: 'ai' | 'database' | 'commerce' | 'marketing' | 'automation';
   configured: boolean;
-  mode: 'demo' | 'connected';
+  mode: 'disconnected' | 'connected';
   description: string;
 }
 
@@ -339,7 +410,7 @@ export interface ActivityLogEntry {
   departmentId: DepartmentId | 'nexus_core';
   action: string;
   detail: string;
-  isDemoData: boolean;
+  source: 'system' | 'ai_execution';
 }
 
 export interface CompanySettings {
@@ -347,9 +418,29 @@ export interface CompanySettings {
   ceoName: string;
   graphicsQuality: GraphicsQuality;
   simulationSpeed: 1 | 2;
-  demoModeDisclosed: boolean;
   requireApprovalForFinancial: boolean;
   requireApprovalForExternalPublish: boolean;
+}
+
+export interface BrainThoughtNode {
+  id: string;
+  parentId: string | null;
+  skillId: string;
+  actorIds: string[];
+  concept: string;
+  essence: string;
+  importance: number;
+  sourceType: 'conversation' | 'task_execution' | 'core_directive' | 'supervisor_review';
+  createdAt: string;
+  dir: [number, number, number];
+  radius: number;
+}
+
+export interface NexusBrainState {
+  maxConnections: number;
+  nodes: BrainThoughtNode[];
+  filteredOutCount: number;
+  lastEvolvedAt: string | null;
 }
 
 export interface NexusState {
@@ -359,6 +450,9 @@ export interface NexusState {
   employees: EmployeeProfile[];
   skills: SkillDefinition[];
   tools: ToolDefinition[];
+  channels: ChannelConnection[];
+  tokenPolicy: TokenUsagePolicy;
+  tokenLogs: TokenUsageEntry[];
   functions: LibraryFunction[];
   tasks: TaskItem[];
   approvals: ApprovalItem[];
@@ -374,4 +468,5 @@ export interface NexusState {
   integrations: IntegrationConfig[];
   activityLogs: ActivityLogEntry[];
   nexusCoreMessages: ConversationMessage[];
+  brain: NexusBrainState;
 }

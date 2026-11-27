@@ -4,6 +4,7 @@ import {
   BarChart3,
   Bot,
   Box,
+  Brain,
   Building2,
   CheckSquare,
   Cpu,
@@ -26,6 +27,7 @@ interface SidebarProps {
   onCloseMobile: () => void;
   pendingApprovalsCount: number;
   pendingTasksCount: number;
+  brainConnectionsCount?: number;
 }
 
 export const NAV_ITEMS: Array<{
@@ -34,6 +36,7 @@ export const NAV_ITEMS: Array<{
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { id: 'hq', label: 'Painel Principal', icon: Building2 },
+  { id: 'brain', label: 'Cérebro', icon: Brain },
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
   { id: 'employees', label: 'Funcionários', icon: Users },
   { id: 'departments', label: 'Departamentos', icon: Activity },
@@ -56,6 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
   pendingApprovalsCount,
   pendingTasksCount,
+  brainConnectionsCount = 0,
 }) => {
   const handleSelect = (id: NavSectionId) => {
     onSelectSection(id);
@@ -95,6 +99,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ? pendingTasksCount
               : item.id === 'dashboard'
               ? pendingApprovalsCount
+              : item.id === 'brain'
+              ? brainConnectionsCount
               : 0;
 
           return (

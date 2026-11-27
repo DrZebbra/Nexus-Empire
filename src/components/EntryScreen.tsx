@@ -100,8 +100,8 @@ export const EntryScreen: React.FC<EntryScreenProps> = ({
             </div>
             <p className="text-slate-400">
               {geminiConfigured
-                ? 'Integração Gemini ativa no servidor para ordens estruturadas.'
-                : 'Modo de demonstração pronto com arquitetura preparada para Gemini e Supabase.'}
+                ? 'IA Gemini ativa no servidor com Pesquisa Google, permissões hierárquicas e controle de tokens.'
+                : 'Conecte GEMINI_API_KEY e canais oficiais para executar tarefas reais com governança.'}
             </p>
           </div>
         </div>

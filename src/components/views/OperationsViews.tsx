@@ -1,30 +1,37 @@
 import React, { useState } from 'react';
 import {
+  AlertCircle,
   BookOpen,
   Box,
+  CheckCircle2,
+  Cpu,
   Database,
   DollarSign,
   FileText,
   Globe,
+  Link2,
   Megaphone,
   Plus,
+  RefreshCw,
   RotateCcw,
   Settings,
   ShieldCheck,
   ShoppingBag,
+  Unplug,
   Workflow,
 } from 'lucide-react';
 import { calculateFinancialSummary } from '../../core/simulationRules';
 import {
-  isSupabaseConfigured,
   SUPABASE_ENTITY_TABLES,
   SUPABASE_SCHEMA_SQL,
 } from '../../services/supabaseService';
 import type {
+  ChannelId,
   CompanySettings,
   GraphicsQuality,
   NexusState,
   ProductItem,
+  TokenUsagePolicy,
 } from '../../types/nexus';
 
 const formatBRL = (v: number) =>
@@ -35,25 +42,28 @@ export const ProductsView: React.FC<{
   onAddProduct: (product: Omit<ProductItem, 'id' | 'marginPercent'>) => void;
 }> = ({ state, onAddProduct }) => {
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('Casa Inteligente');
-  const [cost, setCost] = useState(110);
-  const [price, setPrice] = useState(299);
+  const [category, setCategory] = useState('');
+  const [cost, setCost] = useState(0);
+  const [price, setPrice] = useState(0);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     onAddProduct({
       name: name.trim(),
-      sku: `NEX-${Math.floor(100 + Math.random() * 899)}`,
-      category,
+      sku: `NEX-${Date.now().toString().slice(-5)}`,
+      category: category.trim() || 'Geral',
       costPrice: Number(cost),
       salePrice: Number(price),
-      supplierId: state.suppliers[0]?.id ?? 'sup_01',
+      supplierId: state.suppliers[0]?.id ?? '',
       status: 'pesquisa',
       specialistId: 'emp_04',
       stock: 0,
     });
     setName('');
+    setCategory('');
+    setCost(0);
+    setPrice(0);
   };
 
   return (
@@ -64,7 +74,7 @@ export const ProductsView: React.FC<{
           <span>Produtos &amp; Fornecedores (1º Andar)</span>
         </h1>
         <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
-          Gestão exclusiva do departamento de Produtos e Desenvolvimento.
+          Catálogo e fornecedores reais cadastrados a partir de pesquisas e homologações.
         </p>
       </div>
 
@@ -75,7 +85,7 @@ export const ProductsView: React.FC<{
         >
           <h2 className="font-display text-sm font-bold text-slate-100 flex items-center gap-2">
             <Plus className="w-4 h-4 text-emerald-400" />
-            <span>Cadastrar Novo Produto</span>
+            <span>Cadastrar Produto Real</span>
           </h2>
           <input
             type="text"
@@ -89,7 +99,7 @@ export const ProductsView: React.FC<{
             type="text"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            placeholder="Categoria"
+            placeholder="Categoria..."
             className="w-full rounded-lg bg-[#0A0E14] border border-slate-700 px-3 py-2 text-xs text-slate-100"
           />
           <div className="grid grid-cols-2 gap-2">
@@ -99,6 +109,8 @@ export const ProductsView: React.FC<{
               </label>
               <input
                 type="number"
+                min={0}
+                step="0.01"
                 value={cost}
                 onChange={(e) => setCost(Number(e.target.value))}
                 className="w-full rounded-lg bg-[#0A0E14] border border-slate-700 px-3 py-2 text-xs text-slate-100 font-mono"
@@ -110,6 +122,8 @@ export const ProductsView: React.FC<{
               </label>
               <input
                 type="number"
+                min={0}
+                step="0.01"
                 value={price}
                 onChange={(e) => setPrice(Number(e.target.value))}
                 className="w-full rounded-lg bg-[#0A0E14] border border-slate-700 px-3 py-2 text-xs text-slate-100 font-mono"
@@ -125,45 +139,57 @@ export const ProductsView: React.FC<{
         </form>
 
         <div className="lg:col-span-2 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {state.products.map((p) => (
-              <div
-                key={p.id}
-                className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-2"
-              >
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-mono text-slate-400">{p.sku}</span>
-                  <span className="text-emerald-400 font-semibold">{p.status}</span>
+          {state.products.length === 0 ? (
+            <div className="rounded-xl border border-slate-800 bg-[#10151D] p-8 text-center text-xs text-slate-400">
+              Nenhum produto real cadastrado ainda. Cadastre ao lado ou solicite uma pesquisa de mercado em Tarefas.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {state.products.map((p) => (
+                <div
+                  key={p.id}
+                  className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-2"
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono text-slate-400">{p.sku}</span>
+                    <span className="text-emerald-400 font-semibold">{p.status}</span>
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-100">{p.name}</h3>
+                  <p className="text-xs text-slate-400">{p.category}</p>
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs font-mono">
+                    <span className="text-slate-300">{formatBRL(p.salePrice)}</span>
+                    <span className="text-cyan-300">Margem {p.marginPercent}%</span>
+                    <span className="text-slate-400">Est: {p.stock}</span>
+                  </div>
                 </div>
-                <h3 className="text-sm font-bold text-slate-100">{p.name}</h3>
-                <p className="text-xs text-slate-400">{p.category}</p>
-                <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs font-mono">
-                  <span className="text-slate-300">{formatBRL(p.salePrice)}</span>
-                  <span className="text-cyan-300">Margem {p.marginPercent}%</span>
-                  <span className="text-slate-400">Est: {p.stock}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           <div className="rounded-xl border border-slate-800 bg-[#10151D] p-4">
             <h3 className="text-xs font-bold text-slate-200 mb-3">
               Fornecedores Homologados ({state.suppliers.length})
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-              {state.suppliers.map((s) => (
-                <div
-                  key={s.id}
-                  className="rounded-lg bg-[#0B0F14] border border-slate-800 p-3"
-                >
-                  <p className="font-semibold text-slate-100">{s.name}</p>
-                  <p className="text-slate-400 mt-0.5">{s.region}</p>
-                  <p className="font-mono text-emerald-300 mt-1">
-                    SLA {s.leadTimeDays}d · {s.reliabilityScore}%
-                  </p>
-                </div>
-              ))}
-            </div>
+            {state.suppliers.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                Nenhum fornecedor homologado ainda.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                {state.suppliers.map((s) => (
+                  <div
+                    key={s.id}
+                    className="rounded-lg bg-[#0B0F14] border border-slate-800 p-3"
+                  >
+                    <p className="font-semibold text-slate-100">{s.name}</p>
+                    <p className="text-slate-400 mt-0.5">{s.region}</p>
+                    <p className="font-mono text-emerald-300 mt-1">
+                      SLA {s.leadTimeDays}d · {s.reliabilityScore}%
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -182,42 +208,48 @@ export const MarketingView: React.FC<{
         <span>Marketing &amp; Campanhas (2º Andar)</span>
       </h1>
       <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
-        Publicações externas e liberações de orçamento exigem aprovação do CEO.
+        Campanhas reais dependem da conexão oficial dos canais Meta Ads / Google Ads e aprovação do CEO.
       </p>
     </div>
 
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {state.campaigns.map((c) => {
-        const manager = state.employees.find((e) => e.id === c.managerId);
-        return (
-          <div
-            key={c.id}
-            className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-3"
-          >
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-violet-300 font-semibold">{c.channel}</span>
-              <span className="font-mono text-slate-300">{c.status}</span>
+    {state.campaigns.length === 0 ? (
+      <div className="rounded-xl border border-slate-800 bg-[#10151D] p-8 text-center text-xs text-slate-400">
+        Nenhuma campanha real criada. Conecte os canais oficiais de mídia em Configurações antes de iniciar campanhas.
+      </div>
+    ) : (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {state.campaigns.map((c) => {
+          const manager = state.employees.find((e) => e.id === c.managerId);
+          return (
+            <div
+              key={c.id}
+              className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-3"
+            >
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-violet-300 font-semibold">{c.channel}</span>
+                <span className="font-mono text-slate-300">{c.status}</span>
+              </div>
+              <h2 className="text-sm font-bold text-slate-100">{c.name}</h2>
+              <div className="text-xs text-slate-400 space-y-1 font-mono">
+                <p>Orçamento: {formatBRL(c.budget)}</p>
+                <p>Investido: {formatBRL(c.spent)}</p>
+                <p>Conversões: {c.conversions}</p>
+              </div>
+              <p className="text-[11px] text-slate-500">Gestor: {manager?.name}</p>
+              {c.status === 'aguardando_aprovacao' && (
+                <button
+                  type="button"
+                  onClick={() => onApproveCampaign(c.id)}
+                  className="w-full py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-white font-semibold text-xs cursor-pointer"
+                >
+                  Aprovar Publicação &amp; Verba
+                </button>
+              )}
             </div>
-            <h2 className="text-sm font-bold text-slate-100">{c.name}</h2>
-            <div className="text-xs text-slate-400 space-y-1 font-mono">
-              <p>Orçamento: {formatBRL(c.budget)}</p>
-              <p>Investido: {formatBRL(c.spent)}</p>
-              <p>Conversões (Demo): {c.conversions}</p>
-            </div>
-            <p className="text-[11px] text-slate-500">Gestor: {manager?.name}</p>
-            {c.status === 'aguardando_aprovacao' && (
-              <button
-                type="button"
-                onClick={() => onApproveCampaign(c.id)}
-                className="w-full py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-white font-semibold text-xs cursor-pointer"
-              >
-                Aprovar Publicação &amp; Verba
-              </button>
-            )}
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+    )}
   </div>
 );
 
@@ -232,38 +264,44 @@ export const StoresView: React.FC<{
         <span>Lojas Online</span>
       </h1>
     </div>
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {state.stores.map((st) => (
-        <div
-          key={st.id}
-          className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-3"
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-slate-100">{st.name}</h2>
-            <span
-              className={`text-xs font-mono ${
-                st.status === 'online' ? 'text-emerald-400' : 'text-amber-300'
-              }`}
-            >
-              {st.status}
-            </span>
-          </div>
-          <p className="text-xs text-slate-400">
-            {st.domain} · {st.platform}
-          </p>
-          <p className="font-mono text-sm text-cyan-300">
-            Receita mensal (Demo): {formatBRL(st.monthlyRevenue)}
-          </p>
-          <button
-            type="button"
-            onClick={() => onToggleStoreStatus(st.id)}
-            className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 cursor-pointer"
+    {state.stores.length === 0 ? (
+      <div className="rounded-xl border border-slate-800 bg-[#10151D] p-8 text-center text-xs text-slate-400">
+        Nenhuma loja conectada ainda. Configure o canal oficial Loja Online &amp; Gateway E-commerce em Configurações.
+      </div>
+    ) : (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {state.stores.map((st) => (
+          <div
+            key={st.id}
+            className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-3"
           >
-            Alternar Status ({st.status === 'online' ? 'Pausar' : 'Ativar'})
-          </button>
-        </div>
-      ))}
-    </div>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-slate-100">{st.name}</h2>
+              <span
+                className={`text-xs font-mono ${
+                  st.status === 'online' ? 'text-emerald-400' : 'text-amber-300'
+                }`}
+              >
+                {st.status}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              {st.domain} · {st.platform}
+            </p>
+            <p className="font-mono text-sm text-cyan-300">
+              Receita mensal: {formatBRL(st.monthlyRevenue)}
+            </p>
+            <button
+              type="button"
+              onClick={() => onToggleStoreStatus(st.id)}
+              className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 cursor-pointer"
+            >
+              Alternar Status ({st.status === 'online' ? 'Pausar' : 'Ativar'})
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
   </div>
 );
 
@@ -278,32 +316,38 @@ export const SitesView: React.FC<{
         <span>Sites &amp; Landing Pages</span>
       </h1>
     </div>
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {state.sites.map((site) => (
-        <div
-          key={site.id}
-          className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-3"
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-slate-100">{site.name}</h2>
-            <span className="font-mono text-xs text-cyan-300">{site.status}</span>
+    {state.sites.length === 0 ? (
+      <div className="rounded-xl border border-slate-800 bg-[#10151D] p-8 text-center text-xs text-slate-400">
+        Nenhum site ou landing page publicado ainda.
+      </div>
+    ) : (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {state.sites.map((site) => (
+          <div
+            key={site.id}
+            className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-slate-100">{site.name}</h2>
+              <span className="font-mono text-xs text-cyan-300">{site.status}</span>
+            </div>
+            <p className="text-xs text-slate-400">{site.purpose}</p>
+            <p className="font-mono text-xs text-slate-300">
+              URL: {site.url} · Conversão: {site.conversionRate}%
+            </p>
+            {site.status !== 'publicado' && (
+              <button
+                type="button"
+                onClick={() => onPublishSite(site.id)}
+                className="px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs cursor-pointer"
+              >
+                Aprovar Publicação
+              </button>
+            )}
           </div>
-          <p className="text-xs text-slate-400">{site.purpose}</p>
-          <p className="font-mono text-xs text-slate-300">
-            URL: {site.url} · Conversão (Demo): {site.conversionRate}%
-          </p>
-          {site.status !== 'publicado' && (
-            <button
-              type="button"
-              onClick={() => onPublishSite(site.id)}
-              className="px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs cursor-pointer"
-            >
-              Aprovar Publicação
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    )}
   </div>
 );
 
@@ -318,32 +362,38 @@ export const AutomationsView: React.FC<{
         <span>Automações Operacionais</span>
       </h1>
     </div>
-    <div className="space-y-3">
-      {state.automations.map((aut) => (
-        <div
-          key={aut.id}
-          className="rounded-xl border border-slate-800 bg-[#10151D] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-        >
-          <div>
-            <h2 className="text-sm font-bold text-slate-100">{aut.name}</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Gatilho: {aut.trigger} · Execuções: {aut.runsCount}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => onToggleAutomation(aut.id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer ${
-              aut.active
-                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400'
-            }`}
+    {state.automations.length === 0 ? (
+      <div className="rounded-xl border border-slate-800 bg-[#10151D] p-8 text-center text-xs text-slate-400">
+        Nenhuma automação configurada ainda.
+      </div>
+    ) : (
+      <div className="space-y-3">
+        {state.automations.map((aut) => (
+          <div
+            key={aut.id}
+            className="rounded-xl border border-slate-800 bg-[#10151D] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
           >
-            {aut.active ? 'Ativa' : 'Pausada'}
-          </button>
-        </div>
-      ))}
-    </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-100">{aut.name}</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Gatilho: {aut.trigger} · Execuções: {aut.runsCount}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onToggleAutomation(aut.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer ${
+                aut.active
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-400'
+              }`}
+            >
+              {aut.active ? 'Ativa' : 'Pausada'}
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
   </div>
 );
 
@@ -354,7 +404,7 @@ export const FinanceView: React.FC<{ state: NexusState }> = ({ state }) => {
       <div className="pb-4 border-b border-slate-800">
         <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-50 flex items-center gap-2">
           <DollarSign className="w-6 h-6 text-emerald-400" />
-          <span>Financeiro (Registros de Demonstração)</span>
+          <span>Financeiro Real</span>
         </h1>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -378,24 +428,30 @@ export const FinanceView: React.FC<{ state: NexusState }> = ({ state }) => {
         </div>
       </div>
       <div className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-2">
-        {state.financials.map((f) => (
-          <div
-            key={f.id}
-            className="flex items-center justify-between text-xs py-2 border-b border-slate-800/70 last:border-0"
-          >
-            <div>
-              <p className="font-medium text-slate-100">{f.description}</p>
-              <p className="text-slate-500 font-mono">{f.date}</p>
-            </div>
-            <span
-              className={`font-mono font-semibold ${
-                f.type === 'receita' ? 'text-emerald-400' : 'text-red-400'
-              }`}
+        {state.financials.length === 0 ? (
+          <p className="text-xs text-slate-500 py-6 text-center">
+            Nenhum lançamento financeiro real registrado até o momento.
+          </p>
+        ) : (
+          state.financials.map((f) => (
+            <div
+              key={f.id}
+              className="flex items-center justify-between text-xs py-2 border-b border-slate-800/70 last:border-0"
             >
-              {f.type === 'receita' ? '+' : '-'} {formatBRL(f.amount)}
-            </span>
-          </div>
-        ))}
+              <div>
+                <p className="font-medium text-slate-100">{f.description}</p>
+                <p className="text-slate-500 font-mono">{f.date}</p>
+              </div>
+              <span
+                className={`font-mono font-semibold ${
+                  f.type === 'receita' ? 'text-emerald-400' : 'text-red-400'
+                }`}
+              >
+                {f.type === 'receita' ? '+' : '-'} {formatBRL(f.amount)}
+              </span>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -410,7 +466,7 @@ export const ReportsView: React.FC<{
       <div>
         <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-50 flex items-center gap-2">
           <FileText className="w-6 h-6 text-cyan-400" />
-          <span>Relatórios &amp; Livro Histórico</span>
+          <span>Relatórios &amp; Livro Histórico Real</span>
         </h1>
       </div>
       <button
@@ -423,53 +479,258 @@ export const ReportsView: React.FC<{
       </button>
     </div>
 
-    <div className="space-y-3">
-      {state.historicalLedger.map((entry) => (
-        <div
-          key={entry.id}
-          className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-1"
-        >
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-bold text-slate-100">{entry.taskTitle}</span>
-            <span className="font-mono text-slate-400">
-              {new Date(entry.recordedAt).toLocaleString('pt-BR')}
-            </span>
+    {state.historicalLedger.length === 0 ? (
+      <div className="rounded-xl border border-slate-800 bg-[#10151D] p-8 text-center text-xs text-slate-400">
+        Nenhum registro histórico ainda. Quando uma tarefa real for concluída, o gerente do andar arquivará aqui.
+      </div>
+    ) : (
+      <div className="space-y-3">
+        {state.historicalLedger.map((entry) => (
+          <div
+            key={entry.id}
+            className="rounded-xl border border-slate-800 bg-[#10151D] p-4 space-y-1"
+          >
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-100">{entry.taskTitle}</span>
+              <span className="font-mono text-slate-400">
+                {new Date(entry.recordedAt).toLocaleString('pt-BR')}
+              </span>
+            </div>
+            <p className="text-xs text-slate-300">{entry.outcomeSummary}</p>
+            <p className="text-[11px] text-slate-500">
+              {entry.floor}º Andar · Executor: {entry.executedByEmployeeName} · Arquivado por: {entry.loggedByManagerName}
+              {typeof entry.tokensUsed === 'number' && entry.tokensUsed > 0
+                ? ` · ${entry.tokensUsed} tokens`
+                : ''}
+            </p>
           </div>
-          <p className="text-xs text-slate-300">{entry.outcomeSummary}</p>
-          <p className="text-[11px] text-slate-500">
-            {entry.floor}º Andar · Executor: {entry.executedByEmployeeName} · Arquivado por: {entry.loggedByManagerName}
-          </p>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    )}
   </div>
 );
 
 export const SettingsView: React.FC<{
-  settings: CompanySettings;
+  state: NexusState;
   geminiConfigured: boolean;
+  supabaseConnected: boolean;
+  supabaseSyncMessage: string | null;
+  channelVerifyError: string | null;
+  verifyingChannelId: ChannelId | null;
   onUpdateSettings: (patch: Partial<CompanySettings>) => void;
-  onResetDemoData: () => void;
-}> = ({ settings, geminiConfigured, onUpdateSettings, onResetDemoData }) => {
-  const supabaseReady = isSupabaseConfigured();
+  onUpdateTokenPolicy: (patch: Partial<TokenUsagePolicy>) => void;
+  onConnectChannel: (channelId: ChannelId) => void;
+  onDisconnectChannel: (channelId: ChannelId) => void;
+  onSyncSupabaseNow: () => void;
+  onResetWorkspace: () => void;
+}> = ({
+  state,
+  geminiConfigured,
+  supabaseConnected,
+  supabaseSyncMessage,
+  channelVerifyError,
+  verifyingChannelId,
+  onUpdateSettings,
+  onUpdateTokenPolicy,
+  onConnectChannel,
+  onDisconnectChannel,
+  onSyncSupabaseNow,
+  onResetWorkspace,
+}) => {
+  const { settings, channels, tokenPolicy, tokenLogs } = state;
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
       <div className="pb-4 border-b border-slate-800">
         <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-50 flex items-center gap-2">
           <Settings className="w-6 h-6 text-slate-300" />
-          <span>Configurações, Qualidade 3D &amp; Segurança</span>
+          <span>Conexões Oficiais, Limites de Tokens &amp; Configurações</span>
         </h1>
+        <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
+          As tarefas só podem ser executadas após a conexão oficial e segura de seus respectivos canais.
+        </p>
       </div>
 
+      {/* Official Secure Channels Section */}
+      <div className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-sm font-bold text-slate-100 flex items-center gap-2">
+              <Link2 className="w-4 h-4 text-cyan-400" />
+              <span>Conexões Seguras e Oficiais de Canais</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Verificação real no servidor. Nenhum canal externo é simulado sem credenciais oficiais.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onSyncSupabaseNow}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-cyan-500/40 bg-[#0A0E14] hover:border-cyan-400 text-xs font-medium text-cyan-200 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Sincronizar Supabase</span>
+          </button>
+        </div>
+
+        {supabaseSyncMessage && (
+          <p className="text-xs text-cyan-300 bg-cyan-950/30 border border-cyan-500/30 rounded-lg px-3 py-2">
+            {supabaseSyncMessage}
+          </p>
+        )}
+
+        {channelVerifyError && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>{channelVerifyError}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {channels.map((ch) => {
+            const isConnected = ch.status === 'connected';
+            const isVerifying = verifyingChannelId === ch.id;
+            return (
+              <div
+                key={ch.id}
+                className="rounded-lg border border-slate-800 bg-[#0A0E14] p-4 flex flex-col justify-between gap-3"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-slate-100">
+                      {ch.name}
+                    </span>
+                    <span
+                      className={`font-mono text-[10px] px-2 py-0.5 rounded ${
+                        isConnected
+                          ? 'bg-emerald-500/15 text-emerald-300'
+                          : 'bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {isConnected ? 'CONECTADO' : 'DESCONECTADO'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-cyan-300">{ch.provider}</p>
+                  <p className="text-xs text-slate-400">{ch.description}</p>
+                  <p className="text-[10px] font-mono text-slate-500">
+                    Requer segredo de servidor: {ch.requiresServerSecret}
+                  </p>
+                  {ch.accountLabel && (
+                    <p className="text-[11px] text-emerald-300 flex items-center gap-1 pt-0.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{ch.accountLabel}</span>
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {isConnected ? (
+                    <button
+                      type="button"
+                      onClick={() => onDisconnectChannel(ch.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-red-950/60 text-xs text-slate-200 hover:text-red-200 cursor-pointer"
+                    >
+                      <Unplug className="w-3.5 h-3.5" />
+                      <span>Desconectar</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isVerifying}
+                      onClick={() => onConnectChannel(ch.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-semibold text-xs cursor-pointer"
+                    >
+                      <Link2 className="w-3.5 h-3.5" />
+                      <span>
+                        {isVerifying
+                          ? 'Verificando...'
+                          : 'Conectar Oficialmente'}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* AI Token Limits & Logs */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-4">
-          <h2 className="font-display text-sm font-bold text-slate-100">
-            Desempenho 3D &amp; Simulação
+          <h2 className="font-display text-sm font-bold text-slate-100 flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-cyan-400" />
+            <span>Limites de Tokens de IA</span>
+          </h2>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <label className="text-slate-400 block mb-1">
+                Limite Diário de Tokens
+              </label>
+              <input
+                type="number"
+                min={5000}
+                step={5000}
+                value={tokenPolicy.dailyLimit}
+                onChange={(e) =>
+                  onUpdateTokenPolicy({
+                    dailyLimit: Math.max(1000, Number(e.target.value) || 1000),
+                  })
+                }
+                className="w-full rounded-lg bg-[#0A0E14] border border-slate-700 px-3 py-2 text-xs font-mono text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="text-slate-400 block mb-1">
+                Limite por Tarefa
+              </label>
+              <input
+                type="number"
+                min={1000}
+                step={1000}
+                value={tokenPolicy.perTaskLimit}
+                onChange={(e) =>
+                  onUpdateTokenPolicy({
+                    perTaskLimit: Math.max(1000, Number(e.target.value) || 1000),
+                  })
+                }
+                className="w-full rounded-lg bg-[#0A0E14] border border-slate-700 px-3 py-2 text-xs font-mono text-slate-100"
+              />
+            </div>
+          </div>
+          <div className="rounded-lg bg-[#0A0E14] border border-slate-800 p-3 text-xs space-y-1 font-mono">
+            <p className="text-slate-200">
+              Consumidos hoje: {tokenPolicy.usedTotal.toLocaleString('pt-BR')} /{' '}
+              {tokenPolicy.dailyLimit.toLocaleString('pt-BR')}
+            </p>
+            <p className="text-slate-400 text-[11px]">
+              Prompt: {tokenPolicy.promptTokensTotal.toLocaleString('pt-BR')} · Resposta:{' '}
+              {tokenPolicy.completionTokensTotal.toLocaleString('pt-BR')}
+            </p>
+          </div>
+          {tokenLogs.length > 0 && (
+            <div className="space-y-1.5 max-h-36 overflow-y-auto">
+              {tokenLogs.slice(0, 6).map((tl) => (
+                <div
+                  key={tl.id}
+                  className="flex items-center justify-between text-[11px] font-mono text-slate-400 bg-[#0A0E14] px-2.5 py-1.5 rounded border border-slate-800"
+                >
+                  <span className="truncate">{tl.actorName} ({tl.action})</span>
+                  <span className="text-cyan-300 shrink-0">{tl.totalTokens} tok</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-4">
+          <h2 className="font-display text-sm font-bold text-slate-100 flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span>3D, Governança &amp; Estado</span>
           </h2>
           <div>
             <label className="text-xs text-slate-400 block mb-1">
-              Qualidade Gráfica 3D (Mobile / Desktop)
+              Qualidade Gráfica 3D
             </label>
             <select
               value={settings.graphicsQuality}
@@ -502,38 +763,24 @@ export const SettingsView: React.FC<{
               <option value={2}>2x Acelerado</option>
             </select>
           </div>
+          <div className="text-xs space-y-1 text-slate-400">
+            <p>
+              <strong className="text-slate-200">Gemini Servidor:</strong>{' '}
+              {geminiConfigured ? 'Ativo' : 'Aguardando GEMINI_API_KEY'}
+            </p>
+            <p>
+              <strong className="text-slate-200">Supabase:</strong>{' '}
+              {supabaseConnected ? 'Conectado' : 'Aguardando variáveis Supabase'}
+            </p>
+          </div>
           <button
             type="button"
-            onClick={onResetDemoData}
+            onClick={onResetWorkspace}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-700 hover:border-red-400 text-xs text-slate-200 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Restaurar Dados de Demonstração</span>
+            <span>Zerar Operações (Manter Habilidades &amp; Equipe)</span>
           </button>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-[#10151D] p-5 space-y-3">
-          <h2 className="font-display text-sm font-bold text-slate-100 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Governança &amp; Integrações</span>
-          </h2>
-          <div className="text-xs space-y-2 text-slate-300">
-            <p>
-              <strong>Gemini AI (Servidor):</strong>{' '}
-              {geminiConfigured
-                ? 'Conectado via ambiente seguro do servidor'
-                : 'Modo de demonstração local ativo (configure GEMINI_API_KEY nos segredos do servidor)'}
-            </p>
-            <p>
-              <strong>Supabase PostgreSQL + RLS:</strong>{' '}
-              {supabaseReady
-                ? 'Credenciais configuradas'
-                : 'Persistência local ativa (defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para sincronização em nuvem)'}
-            </p>
-            <p className="text-slate-400">
-              Identidade visual dos 12 personagens 3D bloqueada contra edições manuais. Operações financeiras e publicações externas exigem aprovação do CEO.
-            </p>
-          </div>
         </div>
       </div>
 
